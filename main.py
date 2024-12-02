@@ -1,15 +1,17 @@
 import pygame
 import sys
+import sqlite3
+import math
 
-# Инициализация Pygame
+# --- Настройки Pygame ---
 pygame.init()
 
 # Размеры окна
 WIDTH, HEIGHT = 800, 600
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Арканоид")
+pygame.display.set_caption("Арканоид с Авторизацией и Анимацией")
 
-# Частота кадров (FPS)
+# Частота кадров
 FPS = 60
 clock = pygame.time.Clock()
 
@@ -17,143 +19,209 @@ clock = pygame.time.Clock()
 BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
 BLUE = (0, 0, 255)
+RED = (255, 0, 0)
+GREEN = (0, 255, 0)
 
-# Параметры платформы
-PADDLE_WIDTH = 100
-PADDLE_HEIGHT = 20
-PADDLE_SPEED = 7
+# Шрифт
+font = pygame.font.SysFont(None, 55)
 
-# Параметры мяча
-BALL_RADIUS = 10
-ball_speed_x = 4
-ball_speed_y = -4
+# --- Подключение к SQLite ---
+DB_FILE = "arkanoid.db"
 
-# Параметры блоков
-BLOCK_WIDTH = 75
-BLOCK_HEIGHT = 30
-BLOCK_ROWS = 5
-BLOCK_COLUMNS = 8
-block_padding = 10
+conn = sqlite3.connect(DB_FILE)
+cur = conn.cursor()
 
-def reset_game():
-    """Функция для сброса всех игровых параметров при рестарте"""
-    global paddle_x, paddle_y, ball_x, ball_y, ball_speed_x, ball_speed_y, blocks, game_over
+# --- Функции работы с базой данных ---
+def create_users_table():
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
 
-    # Начальная позиция платформы
-    paddle_x = (WIDTH - PADDLE_WIDTH) // 2
-    paddle_y = HEIGHT - PADDLE_HEIGHT - 10
+def register_user(username, password):
+    try:
+        cur.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
 
-    # Начальная позиция мяча
+def authenticate_user(username, password):
+    cur.execute("SELECT * FROM users WHERE username = ? AND password = ?", (username, password))
+    return cur.fetchone() is not None
+
+# --- Главное меню ---
+def main_menu():
+    menu_running = True
+    while menu_running:
+        screen.fill(BLACK)
+        draw_pulsating_text("Main Menu", WIDTH // 2, 100, 0.1)
+        draw_pulsating_text("Press 'L' to Login", WIDTH // 2, 300, 0.05)
+        draw_pulsating_text("Press 'R' to Register", WIDTH // 2, 400, 0.05)
+        pygame.display.flip()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_l:  # Авторизация
+                    username = input_text("Enter Username:", screen, font, (100, 200))
+                    password = input_text("Enter Password:", screen, font, (100, 300))
+                    if authenticate_user(username, password):
+                        return True
+                elif event.key == pygame.K_r:  # Регистрация
+                    username = input_text("Choose Username:", screen, font, (100, 200))
+                    password = input_text("Choose Password:", screen, font, (100, 300))
+                    register_user(username, password)
+    return False
+
+# --- Ввод текста ---
+def input_text(prompt, screen, font, pos, color=pygame.Color("white")):
+    text = ""
+    while True:
+        screen.fill(BLACK)
+        prompt_surface = font.render(prompt, True, color)
+        screen.blit(prompt_surface, pos)
+        input_surface = font.render(text, True, color)
+        screen.blit(input_surface, (pos[0], pos[1] + 50))
+        pygame.display.flip()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_RETURN:
+                    return text
+                elif event.key == pygame.K_BACKSPACE:
+                    text = text[:-1]
+                else:
+                    text += event.unicode
+
+# --- Анимация текста ---
+def draw_pulsating_text(text, x, y, scale, color=WHITE):
+    time = pygame.time.get_ticks() / 1000
+    scale_factor = 1 + math.sin(time * 2) * scale
+    text_surface = font.render(text, True, color)
+    text_surface = pygame.transform.scale(
+        text_surface,
+        (int(text_surface.get_width() * scale_factor), int(text_surface.get_height() * scale_factor)),
+    )
+    screen.blit(text_surface, (x - text_surface.get_width() // 2, y - text_surface.get_height() // 2))
+
+# --- Экран Game Over ---
+def game_over_screen():
+    while True:
+        screen.fill(BLACK)
+        draw_pulsating_text("Game Over", WIDTH // 2, HEIGHT // 2 - 50, 0.1, RED)
+        draw_pulsating_text("Press 'R' to Restart", WIDTH // 2, HEIGHT // 2 + 50, 0.05, WHITE)
+        pygame.display.flip()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+                return  # Вернуться в игровой цикл
+
+# --- Основной игровой цикл ---
+def game_loop():
+    paddle_width = 100
+    paddle_height = 20
+    paddle_x = (WIDTH - paddle_width) // 2
+    paddle_y = HEIGHT - 30
+    paddle_speed = 10
+
+    ball_radius = 10
     ball_x = WIDTH // 2
     ball_y = HEIGHT // 2
+    ball_dx = 5
+    ball_dy = -5
 
-    # Создаем блоки
     blocks = []
-    for row in range(BLOCK_ROWS):
-        block_row = []
-        for col in range(BLOCK_COLUMNS):
-            block_x = col * (BLOCK_WIDTH + block_padding) + block_padding
-            block_y = row * (BLOCK_HEIGHT + block_padding) + block_padding
-            block = pygame.Rect(block_x, block_y, BLOCK_WIDTH, BLOCK_HEIGHT)
-            block_row.append(block)
-        blocks.append(block_row)
+    block_width = 80
+    block_height = 30
+    for row in range(5):
+        for col in range(10):
+            blocks.append(pygame.Rect(col * block_width + 10, row * block_height + 10, block_width - 2, block_height - 2))
 
-    # Сброс флага окончания игры
-    game_over = False
+    running = True
+    move_left = False
+    move_right = False
 
-# Инициализируем начальные параметры
-reset_game()
+    while running:
+        screen.fill(BLACK)
 
-# Флаги состояний игры
-game_started = False
-running = True
-
-while running:
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-
-        # Обрабатываем нажатие клавиш для старта или перезапуска игры
-        if not game_started and event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_s:  # Нажатие клавиши "S" для начала игры
-                game_started = True
-                reset_game()  # Начинаем новую игру
-
-        if game_over and event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_r:  # Нажатие клавиши "R" для рестарта
-                reset_game()
-            elif event.key == pygame.K_s:  # Нажатие клавиши "S" для возврата к стартовому экрану
-                game_started = False
-
-    if game_started and not game_over:
-        # Получаем нажатые клавиши
-        keys = pygame.key.get_pressed()
-
-        # Движение платформы
-        if keys[pygame.K_LEFT] and paddle_x > 0:
-            paddle_x -= PADDLE_SPEED
-        if keys[pygame.K_RIGHT] and paddle_x < WIDTH - PADDLE_WIDTH:
-            paddle_x += PADDLE_SPEED
-
-        # Движение мяча
-        ball_x += ball_speed_x
-        ball_y += ball_speed_y
-
-        # Столкновения мяча с границами экрана
-        if ball_x - BALL_RADIUS <= 0 or ball_x + BALL_RADIUS >= WIDTH:
-            ball_speed_x = -ball_speed_x
-        if ball_y - BALL_RADIUS <= 0:
-            ball_speed_y = -ball_speed_y
-
-        # Проверка на выход мяча за пределы экрана (ниже платформы)
-        if ball_y + BALL_RADIUS >= HEIGHT:
-            game_over = True  # Игра окончена
-
-        # Столкновение мяча с платформой
-        if paddle_y < ball_y + BALL_RADIUS < paddle_y + PADDLE_HEIGHT and paddle_x < ball_x < paddle_x + PADDLE_WIDTH:
-            ball_speed_y = -ball_speed_y
-
-        # Столкновение мяча с блоками
-        for row in blocks:
-            for block in row:
-                if block.collidepoint(ball_x, ball_y):
-                    ball_speed_y = -ball_speed_y  # Мяч отскакивает
-                    row.remove(block)  # Удаляем блок
-                    break
-
-    # Закрашиваем экран черным цветом
-    screen.fill(BLACK)
-
-    if not game_started:
-        # Отображение стартового экрана
-        font = pygame.font.SysFont(None, 55)
-        text = font.render("Press 'S' to Start", True, WHITE)
-        screen.blit(text, (WIDTH // 2 - text.get_width() // 2, HEIGHT // 2 - text.get_height() // 2))
-    
-    elif game_over:
-        # Отображение сообщения после окончания игры
-        font = pygame.font.SysFont(None, 55)
-        text = font.render("Game Over! Press 'R' to Restart or 'S' for Start Screen", True, WHITE)
-        screen.blit(text, (WIDTH // 2 - text.get_width() // 2, HEIGHT // 2 - text.get_height() // 2))
-    
-    else:
         # Рисуем платформу
-        pygame.draw.rect(screen, WHITE, (paddle_x, paddle_y, PADDLE_WIDTH, PADDLE_HEIGHT))
+        pygame.draw.rect(screen, WHITE, (paddle_x, paddle_y, paddle_width, paddle_height))
 
         # Рисуем мяч
-        pygame.draw.circle(screen, WHITE, (ball_x, ball_y), BALL_RADIUS)
+        pygame.draw.circle(screen, RED, (ball_x, ball_y), ball_radius)
 
         # Рисуем блоки
-        for row in blocks:
-            for block in row:
-                pygame.draw.rect(screen, BLUE, block)
+        for block in blocks:
+            pygame.draw.rect(screen, GREEN, block)
 
-    # Обновляем экран
-    pygame.display.flip()
+        # Обновляем мяч
+        ball_x += ball_dx
+        ball_y += ball_dy
 
-    # Ограничиваем частоту кадров
-    clock.tick(FPS)
+        # Проверка столкновений
+        if ball_x - ball_radius <= 0 or ball_x + ball_radius >= WIDTH:
+            ball_dx *= -1
+        if ball_y - ball_radius <= 0:
+            ball_dy *= -1
+        if ball_y + ball_radius >= HEIGHT:
+            game_over_screen()
+            return  # Завершить текущий игровой цикл
 
-# Завершение работы Pygame
+        # Столкновение с платформой
+        if paddle_x <= ball_x <= paddle_x + paddle_width and paddle_y <= ball_y + ball_radius <= paddle_y + paddle_height:
+            ball_dy *= -1
+
+        # Столкновение с блоками
+        for block in blocks[:]:
+            if block.collidepoint(ball_x, ball_y):
+                blocks.remove(block)
+                ball_dy *= -1
+                break
+
+        # Управление платформой
+        if move_left and paddle_x > 0:
+            paddle_x -= paddle_speed
+        if move_right and paddle_x < WIDTH - paddle_width:
+            paddle_x += paddle_speed
+
+        # Обработка событий
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_LEFT:
+                    move_left = True
+                if event.key == pygame.K_RIGHT:
+                    move_right = True
+            if event.type == pygame.KEYUP:
+                if event.key == pygame.K_LEFT:
+                    move_left = False
+                if event.key == pygame.K_RIGHT:
+                    move_right = False
+
+        pygame.display.flip()
+        clock.tick(FPS)
+
+# --- Создание таблицы пользователей и запуск ---
+create_users_table()
+if main_menu():  # Авторизация происходит только один раз
+    while True:  # Игровой цикл с возможностью перезапуска
+        game_loop()
+
 pygame.quit()
 sys.exit()
