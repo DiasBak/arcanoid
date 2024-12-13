@@ -1,7 +1,7 @@
 import pygame
 import sys
 import sqlite3
-import math
+import random
 
 # --- Настройки Pygame ---
 pygame.init()
@@ -9,7 +9,7 @@ pygame.init()
 # Размеры окна
 WIDTH, HEIGHT = 800, 600
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Арканоид с Авторизацией и Анимацией")
+pygame.display.set_caption("Arkanoid")
 
 # Частота кадров
 FPS = 60
@@ -18,20 +18,21 @@ clock = pygame.time.Clock()
 # Цвета
 BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
-BLUE = (0, 0, 255)
 RED = (255, 0, 0)
 GREEN = (0, 255, 0)
+BLUE = (0, 0, 255)
+YELLOW = (255, 255, 0)
+GRAY = (100, 100, 100)
 
-# Шрифт
-font = pygame.font.SysFont(None, 55)
+# --- Шрифт ---
+font = pygame.font.SysFont(None, 40)
 
-# --- Подключение к SQLite ---
+# --- Подключение к базе данных SQLite ---
 DB_FILE = "arkanoid.db"
-
 conn = sqlite3.connect(DB_FILE)
 cur = conn.cursor()
 
-# --- Функции работы с базой данных ---
+# --- Работа с базой данных ---
 def create_users_table():
     cur.execute(
         """
@@ -56,41 +57,19 @@ def authenticate_user(username, password):
     cur.execute("SELECT * FROM users WHERE username = ? AND password = ?", (username, password))
     return cur.fetchone() is not None
 
-# --- Главное меню ---
-def main_menu():
-    menu_running = True
-    while menu_running:
-        screen.fill(BLACK)
-        draw_pulsating_text("Main Menu", WIDTH // 2, 100, 0.1)
-        draw_pulsating_text("Press 'L' to Login", WIDTH // 2, 300, 0.05)
-        draw_pulsating_text("Press 'R' to Register", WIDTH // 2, 400, 0.05)
-        pygame.display.flip()
-
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                sys.exit()
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_l:  # Авторизация
-                    username = input_text("Enter Username:", screen, font, (100, 200))
-                    password = input_text("Enter Password:", screen, font, (100, 300))
-                    if authenticate_user(username, password):
-                        return True
-                elif event.key == pygame.K_r:  # Регистрация
-                    username = input_text("Choose Username:", screen, font, (100, 200))
-                    password = input_text("Choose Password:", screen, font, (100, 300))
-                    register_user(username, password)
-    return False
-
-# --- Ввод текста ---
-def input_text(prompt, screen, font, pos, color=pygame.Color("white")):
+# --- Функции для интерфейса ---
+def input_text(prompt, screen, font, pos, color=WHITE, password=False):
+    """Получение ввода текста. Если password=True, то ввод отображается как звездочки."""
     text = ""
     while True:
         screen.fill(BLACK)
         prompt_surface = font.render(prompt, True, color)
         screen.blit(prompt_surface, pos)
-        input_surface = font.render(text, True, color)
+
+        display_text = text if not password else '*' * len(text)
+        input_surface = font.render(display_text, True, color)
         screen.blit(input_surface, (pos[0], pos[1] + 50))
+
         pygame.display.flip()
 
         for event in pygame.event.get():
@@ -105,123 +84,256 @@ def input_text(prompt, screen, font, pos, color=pygame.Color("white")):
                 else:
                     text += event.unicode
 
-# --- Анимация текста ---
-def draw_pulsating_text(text, x, y, scale, color=WHITE):
-    time = pygame.time.get_ticks() / 1000
-    scale_factor = 1 + math.sin(time * 2) * scale
-    text_surface = font.render(text, True, color)
-    text_surface = pygame.transform.scale(
-        text_surface,
-        (int(text_surface.get_width() * scale_factor), int(text_surface.get_height() * scale_factor)),
-    )
-    screen.blit(text_surface, (x - text_surface.get_width() // 2, y - text_surface.get_height() // 2))
+def draw_button(text, x, y, width, height, color, text_color, font, screen):
+    """Отрисовка кнопок."""
+    button_rect = pygame.Rect(x, y, width, height)
+    pygame.draw.rect(screen, color, button_rect, border_radius=5)
+    text_surface = font.render(text, True, text_color)
+    screen.blit(text_surface, (x + (width - text_surface.get_width()) // 2, y + (height - text_surface.get_height()) // 2))
+    return button_rect
 
-# --- Экран Game Over ---
-def game_over_screen():
+def pause_menu():
+    """Меню паузы."""
     while True:
         screen.fill(BLACK)
-        draw_pulsating_text("Game Over", WIDTH // 2, HEIGHT // 2 - 50, 0.1, RED)
-        draw_pulsating_text("Press 'R' to Restart", WIDTH // 2, HEIGHT // 2 + 50, 0.05, WHITE)
+        continue_button = draw_button("Continue", WIDTH // 2 - 100, HEIGHT // 2 - 50, 200, 50, GREEN, WHITE, font, screen)
+        exit_button = draw_button("Exit", WIDTH // 2 - 100, HEIGHT // 2 + 50, 200, 50, RED, WHITE, font, screen)
         pygame.display.flip()
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
-                return  # Вернуться в игровой цикл
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                mouse_pos = event.pos
+                if continue_button.collidepoint(mouse_pos):
+                    return
+                elif exit_button.collidepoint(mouse_pos):
+                    pygame.quit()
+                    sys.exit()
 
-# --- Основной игровой цикл ---
-def game_loop():
-    paddle_width = 100
-    paddle_height = 20
-    paddle_x = (WIDTH - paddle_width) // 2
-    paddle_y = HEIGHT - 30
-    paddle_speed = 10
-
-    ball_radius = 10
-    ball_x = WIDTH // 2
-    ball_y = HEIGHT // 2
-    ball_dx = 5
-    ball_dy = -5
-
-    blocks = []
-    block_width = 80
-    block_height = 30
-    for row in range(5):
-        for col in range(10):
-            blocks.append(pygame.Rect(col * block_width + 10, row * block_height + 10, block_width - 2, block_height - 2))
-
-    running = True
-    move_left = False
-    move_right = False
-
-    while running:
+def game_over_menu():
+    """Окно Game Over."""
+    while True:
         screen.fill(BLACK)
+        game_over_text = font.render("GAME OVER", True, RED)
+        screen.blit(game_over_text, (WIDTH // 2 - game_over_text.get_width() // 2, HEIGHT // 2 - 100))
 
-        # Рисуем платформу
-        pygame.draw.rect(screen, WHITE, (paddle_x, paddle_y, paddle_width, paddle_height))
+        retry_button = draw_button("Retry", WIDTH // 2 - 100, HEIGHT // 2 - 20, 200, 50, GREEN, WHITE, font, screen)
+        exit_button = draw_button("Exit", WIDTH // 2 - 100, HEIGHT // 2 + 60, 200, 50, RED, WHITE, font, screen)
+        pygame.display.flip()
 
-        # Рисуем мяч
-        pygame.draw.circle(screen, RED, (ball_x, ball_y), ball_radius)
-
-        # Рисуем блоки
-        for block in blocks:
-            pygame.draw.rect(screen, GREEN, block)
-
-        # Обновляем мяч
-        ball_x += ball_dx
-        ball_y += ball_dy
-
-        # Проверка столкновений
-        if ball_x - ball_radius <= 0 or ball_x + ball_radius >= WIDTH:
-            ball_dx *= -1
-        if ball_y - ball_radius <= 0:
-            ball_dy *= -1
-        if ball_y + ball_radius >= HEIGHT:
-            game_over_screen()
-            return  # Завершить текущий игровой цикл
-
-        # Столкновение с платформой
-        if paddle_x <= ball_x <= paddle_x + paddle_width and paddle_y <= ball_y + ball_radius <= paddle_y + paddle_height:
-            ball_dy *= -1
-
-        # Столкновение с блоками
-        for block in blocks[:]:
-            if block.collidepoint(ball_x, ball_y):
-                blocks.remove(block)
-                ball_dy *= -1
-                break
-
-        # Управление платформой
-        if move_left and paddle_x > 0:
-            paddle_x -= paddle_speed
-        if move_right and paddle_x < WIDTH - paddle_width:
-            paddle_x += paddle_speed
-
-        # Обработка событий
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                running = False
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_LEFT:
-                    move_left = True
-                if event.key == pygame.K_RIGHT:
-                    move_right = True
-            if event.type == pygame.KEYUP:
-                if event.key == pygame.K_LEFT:
-                    move_left = False
-                if event.key == pygame.K_RIGHT:
-                    move_right = False
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                mouse_pos = event.pos
+                if retry_button.collidepoint(mouse_pos):
+                    return True
+                elif exit_button.collidepoint(mouse_pos):
+                    pygame.quit()
+                    sys.exit()
 
+def main_menu():
+    """Главное меню."""
+    while True:
+        screen.fill(BLACK)
+        login_button = draw_button("Login", 300, 200, 200, 50, BLUE, WHITE, font, screen)
+        register_button = draw_button("Register", 300, 300, 200, 50, GREEN, WHITE, font, screen)
+        play_button = draw_button("Play as Guest", 300, 400, 200, 50, WHITE, BLACK, font, screen)
+        exit_button = draw_button("Exit", 300, 500, 200, 50, RED, WHITE, font, screen)
         pygame.display.flip()
-        clock.tick(FPS)
 
-# --- Создание таблицы пользователей и запуск ---
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                mouse_pos = event.pos
+                if login_button.collidepoint(mouse_pos):
+                    username = input_text("Enter Username:", screen, font, (100, 200))
+                    password = input_text("Enter Password:", screen, font, (100, 300), password=True)
+                    if authenticate_user(username, password):
+                        return username
+                elif register_button.collidepoint(mouse_pos):
+                    username = input_text("Choose Username:", screen, font, (100, 200))
+                    password = input_text("Choose Password:", screen, font, (100, 300), password=True)
+                    if register_user(username, password):
+                        message = "Registration Successful!"
+                    else:
+                        message = "Username already exists!"
+                    prompt = font.render(message, True, GREEN)
+                    screen.blit(prompt, (300, 400))
+                    pygame.display.flip()
+                    pygame.time.delay(2000)
+                elif play_button.collidepoint(mouse_pos):
+                    return None
+                elif exit_button.collidepoint(mouse_pos):
+                    pygame.quit()
+                    sys.exit()
+
+# --- Основной игровой процесс ---
+def reset_game():
+    """Сбросить параметры игры."""
+    ball_x, ball_y = WIDTH // 2, HEIGHT // 2
+    ball_dx, ball_dy = 5, -5
+    ball_radius = 10
+
+    paddle_width, paddle_height = 100, 20
+    paddle_x, paddle_y = (WIDTH - paddle_width) // 2, HEIGHT - 40
+    paddle_speed = 10
+
+    blocks = []
+    indestructible_blocks = []
+    bonuses = []
+    block_width, block_height = 80, 30
+
+    # Генерация блоков
+    for row in range(6):
+        for col in range(10):
+            if random.random() < 0.05: 
+                indestructible_blocks.append(pygame.Rect(col * block_width + 10, row * block_height + 10, block_width - 2, block_height - 2))
+            else:
+                blocks.append(pygame.Rect(col * block_width + 10, row * block_height + 10, block_width - 2, block_height - 2))
+
+    return ball_x, ball_y, ball_dx, ball_dy, blocks, indestructible_blocks, bonuses, paddle_x, paddle_y
+
+
+def spawn_bonus(block_rect):
+    """Создание бонуса, выпадающего из разрушенного блока."""
+    if random.random() < 0.3:  # 30% шанс выпадения бонуса
+        return pygame.Rect(block_rect.x, block_rect.y, 20, 20)
+    return None
+
+def game_loop(username=None):
+    """Основной игровой цикл."""
+    while True:
+        ball_x, ball_y, ball_dx, ball_dy, blocks, indestructible_blocks, bonuses, paddle_x, paddle_y = reset_game()
+
+        paddle_width, paddle_height = 100, 20
+        paddle_speed = 10
+        ball_radius = 10
+
+        move_left, move_right = False, False
+        paused = False
+
+        while True:
+            if paused:
+                pause_menu()
+                paused = False
+
+            # Обработка событий
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_LEFT:
+                        move_left = True
+                    elif event.key == pygame.K_RIGHT:
+                        move_right = True
+                    elif event.key == pygame.K_ESCAPE:
+                        paused = True
+                elif event.type == pygame.KEYUP:
+                    if event.key == pygame.K_LEFT:
+                        move_left = False
+                    elif event.key == pygame.K_RIGHT:
+                        move_right = False
+
+            # Движение платформы
+            if move_left and paddle_x > 0:
+                paddle_x -= paddle_speed
+            if move_right and paddle_x < WIDTH - paddle_width:
+                paddle_x += paddle_speed
+
+            # Движение мяча
+            ball_x += ball_dx
+            ball_y += ball_dy
+
+            # Отражения от стен
+            if ball_x - ball_radius <= 0 or ball_x + ball_radius >= WIDTH:
+                ball_dx *= -1
+            if ball_y - ball_radius <= 0:
+                ball_dy *= -1
+            if ball_y + ball_radius >= HEIGHT:
+                if not game_over_menu():
+                    return
+                else:
+                    break
+
+            # Отражение от платформы
+            if paddle_x <= ball_x <= paddle_x + paddle_width and paddle_y <= ball_y + ball_radius <= paddle_y + paddle_height:
+                ball_dy *= -1
+
+            # Проверка столкновений с блоками
+            for block in blocks[:]:
+                if block.collidepoint(ball_x, ball_y - ball_radius) or block.collidepoint(ball_x, ball_y + ball_radius):
+                    blocks.remove(block)
+                    ball_dy *= -1
+                    bonus = spawn_bonus(block)
+                    if bonus:
+                        bonuses.append(bonus)
+                    break
+            for block in indestructible_blocks:
+                if block.collidepoint(ball_x, ball_y - ball_radius) or block.collidepoint(ball_x, ball_y + ball_radius):
+                    ball_dy *= -1
+                    break
+
+            # Обработка бонусов
+            for bonus in bonuses[:]:
+                bonus.y += 5  # Бонус падает вниз
+                if bonus.colliderect(pygame.Rect(paddle_x, paddle_y, paddle_width, paddle_height)):
+                    bonuses.remove(bonus)
+                    paddle_width = min(paddle_width + 20, WIDTH // 2)  # Увеличить платформу
+                elif bonus.y > HEIGHT:
+                    bonuses.remove(bonus)
+
+            # Проверка, все ли блоки разрушены
+            if not blocks and not indestructible_blocks:
+                win_menu()
+                break
+
+            # Отображение объектов на экране
+            screen.fill(BLACK)
+            for block in blocks:
+                pygame.draw.rect(screen, YELLOW, block)
+            for block in indestructible_blocks:
+                pygame.draw.rect(screen, BLUE, block)
+            for bonus in bonuses:
+                pygame.draw.rect(screen, RED, bonus)
+            pygame.draw.rect(screen, GREEN, pygame.Rect(paddle_x, paddle_y, paddle_width, paddle_height))
+            pygame.draw.circle(screen, WHITE, (ball_x, ball_y), ball_radius)
+            pygame.display.flip()
+            clock.tick(FPS)
+
+def win_menu():
+    """Меню победы."""
+    while True:
+        screen.fill(BLACK)
+        win_text = font.render("YOU WIN!", True, GREEN)
+        screen.blit(win_text, (WIDTH // 2 - win_text.get_width() // 2, HEIGHT // 2 - 100))
+
+        retry_button = draw_button("Retry", WIDTH // 2 - 100, HEIGHT // 2 - 20, 200, 50, GREEN, WHITE, font, screen)
+        exit_button = draw_button("Exit", WIDTH // 2 - 100, HEIGHT // 2 + 60, 200, 50, RED, WHITE, font, screen)
+        pygame.display.flip()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                mouse_pos = event.pos
+                if retry_button.collidepoint(mouse_pos):
+                    return True
+                elif exit_button.collidepoint(mouse_pos):
+                    pygame.quit()
+                    sys.exit()
+
+# --- Создание таблицы пользователей ---
 create_users_table()
-if main_menu():  # Авторизация происходит только один раз
-    while True:  # Игровой цикл с возможностью перезапуска
-        game_loop()
 
-pygame.quit()
-sys.exit()
+# --- Главный цикл программы ---
+if __name__ == "__main__":
+    username = main_menu()
+    game_loop(username)
